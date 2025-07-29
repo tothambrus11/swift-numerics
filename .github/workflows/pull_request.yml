@@ -1,19 +1,175 @@
-name: Pull request
+---
+name: Build and test
 
+# README:
+#
+# The semantics for running shell commands in GitHub actions is non-obvious. Please read
+# https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#jobsjob_idstepsshell
+# before modifying this file. Our strategy is to rely on the built-in (unspecified) shell, and
+# explicitly set the shell settings we want (with `set -eo pipefail`) at the beginning of any
+# bash script. For more information on these settings, see `man bash`.
+#
+# GitHub Actions files can be difficult to modify with confidence, because testing changes often
+# requires pushing to a branch and running CI remotely. To make this process easier, consider
+# the following:
+#
+# 1) Use Visual Studio Code with the GitHub Actions Extension (github.vscode-github-actions).
+#    This allows you to check the validity of your action schema and syntax without pushing to a
+#    branch.
+# 2) Use https://github.com/nektos/act to run your CI steps locally. Note this will only work with
+#    steps run on Linux platforms, as `act` is implemented with Docker containers.
+#
 on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "Docs/**"
+      - "**.md"
+      - "README.md"
+      - "LICENSE"
+      - ".gitignore"
+      - ".editorconfig"
+    tags:
+      - v*
   pull_request:
-    types: [opened, reopened, synchronize]
+    branches: ["**"]
+    paths-ignore:
+      - "Docs/**"
+      - "**.md"
+      - "README.md"
+      - "LICENSE"
+      - ".gitignore"
+      - ".editorconfig"
+
+env:
+  spm-build-options: -Xswiftc -enable-testing --explicit-target-dependency-import-check error
+  spm-test-options: --parallel
+  swift-version: '6.1'
 
 jobs:
-  tests:
-    name: Test
-    uses: swiftlang/github-workflows/.github/workflows/swift_package_test.yml@main
-  soundness:
-    name: Soundness
-    uses: swiftlang/github-workflows/.github/workflows/soundness.yml@main
-    with:
-      license_header_check_project_name: "Swift Numerics"
-      # https://github.com/apple/swift-numerics/issues/303
-      license_header_check_enabled: false
-      # https://github.com/apple/swift-numerics/issues/302
-      format_check_enabled: false
+  determine-version:
+    name: "Determine compiler version from git tag"
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get-tag.outputs.version }}
+    steps:
+      - id: get-tag
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            version="${GITHUB_REF#refs/tags/}"
+          else
+            version=""
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  native-spm:
+    needs: determine-version
+    name: "Native: ${{ matrix.exact-os }}/SPM/${{ matrix.config }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        exact-os: [macos-14, ubuntu-24.04, windows-2025]
+        config: [debug, release]
+
+    runs-on: ${{ matrix.exact-os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          show-progress: false
+          path: hylo
+
+      - name: Set up swift
+        uses: SwiftyLab/setup-swift@latest
+        with:
+          swift-version: ${{ env.swift-version }} # already verifies Swift version
+
+      - name: Set up Visual Studio Development Environment (Windows)
+        if: ${{ runner.os == 'Windows' }}
+        uses: compnerd/gha-setup-vsdevenv@main
+        with:
+          winsdk: "10.0.22621.0" # Workaround for this: https://forums.swift.org/t/swiftpm-plugin-doesnt-work-with-the-latest-visual-studio-version/78183/14
+          # TL;DR: The Windows SDK had a change in 10.0.26100.0 that the Swift compiler didn't account for.
+          # The Swift compiler team is aware of the issue and they are going to release a fix some time.
+
+      - name: SPM cache setup
+        # Workaround for https://github.com/actions/cache/issues/1541
+        uses: actions/cache@v4.2.2
+        with:
+          path: hylo/.build
+          key: ${{ matrix.exact-os }}-${{ matrix.config }}-spm-${{ hashFiles('hylo/**/Package.resolved') }}
+          restore-keys: |
+            ${{ matrix.exact-os }}-${{ matrix.config }}-spm-
+
+      - name: Build
+        run: swift build -c ${{ matrix.config }} ${{ env.spm-build-options }} --build-tests
+        working-directory: hylo
+
+      - name: Test
+        run: swift test --skip-build -c ${{ matrix.config }} ${{ env.spm-build-options }} ${{ env.spm-test-options }}
+        working-directory: hylo
+
+
+  native-cmake:
+    needs: determine-version
+    name: "Native: ${{ matrix.exact-os }}/CMake/${{ matrix.cmake-build-type }}/${{ matrix.cmake-generator }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        # Temporarily disable CMake builds on macOS because of some compilation issues regarding tgmath.h used by the Algorithms library transitively.
+        exact-os: [ubuntu-24.04, windows-2025, macos-14]
+        cmake-generator: [Ninja, Xcode]
+        cmake-build-type: [Debug, Release]
+
+        exclude:
+          # Exclude Xcode for non-macOS platforms
+          - exact-os: ubuntu-24.04
+            cmake-generator: Xcode
+
+          - exact-os: windows-2025
+            cmake-generator: Xcode
+
+    runs-on: ${{ matrix.exact-os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          show-progress: false
+          path: hylo
+
+      - name: Set up Swift
+        uses: SwiftyLab/setup-swift@latest
+        with:
+          swift-version: ${{ env.swift-version }} # already verifies Swift version
+
+      - name: Set up Visual Studio Development Environment (Windows)
+        if: ${{ runner.os == 'Windows' }}
+        uses: compnerd/gha-setup-vsdevenv@main
+        with:
+          winsdk: "10.0.22621.0" # Workaround for this: https://forums.swift.org/t/swiftpm-plugin-doesnt-work-with-the-latest-visual-studio-version/78183/14
+          # TL;DR: The Windows SDK had a change in 10.0.26100.0 that the Swift compiler didn't account for.
+          # The Swift compiler team is aware of the issue and they are going to release a fix some time.
+
+      - name: Set up latest CMake and Ninja
+        uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: latestrc
+
+      - name: CMake Configure
+        run: >-
+          cmake -G '${{ matrix.cmake-generator }}' -S . -B .cmake-build
+          ${{ matrix.cmake-generator != 'Xcode' && format('-DCMAKE_BUILD_TYPE={0}', matrix.cmake-build-type) || '' }}
+          -DBUILD_TESTING=YES
+          ${{ runner.os == 'macOS' && '-DCMAKE_Swift_COMPILER=$(xcrun -f swiftc) -DCMAKE_OSX_SYSROOT=$(xcrun --show-sdk-path)' || '' }}
+        working-directory: hylo
+
+      - name: Build
+        run: cmake --build hylo/.cmake-build ${{ matrix.cmake-generator == 'Xcode' && format('--config {0}', matrix.cmake-build-type) || '' }}
+
+      - name: Test
+        run: ctest --output-on-failure --parallel --test-dir hylo/.cmake-build ${{ matrix.cmake-generator == 'Xcode' && format('-C {0}', matrix.cmake-build-type) || '' }}
+
+      - name: Output compiler version
+        run: cmake --build hylo/.cmake-build --target output_compiler_version -- --quiet&
