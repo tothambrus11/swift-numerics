@@ -13,8 +13,6 @@ add_library(_TestSupport
   Error.swift
   Interval.swift
   RealTestSupport.swift)
-set_target_properties(_TestSupport PROPERTIES
-  INTERFACE_INCLUDE_DIRECTORIES ${CMAKE_Swift_MODULE_DIRECTORY})
 target_link_libraries(_TestSupport PUBLIC
   Numerics)
 

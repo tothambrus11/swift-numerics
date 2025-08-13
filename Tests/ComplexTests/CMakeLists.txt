@@ -12,8 +12,7 @@ add_library(ComplexTests
   ArithmeticTests.swift
   ElementaryFunctionTests.swift
   PropertyTests.swift)
-set_target_properties(ComplexTests PROPERTIES
-  INTERFACE_INCLUDE_DIRECTORIES ${CMAKE_Swift_MODULE_DIRECTORY})
+
 target_compile_options(ComplexTests PRIVATE
   -enable-testing)
 target_link_libraries(ComplexTests PUBLIC
