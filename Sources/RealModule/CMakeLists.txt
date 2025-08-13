@@ -19,8 +19,6 @@ add_library(RealModule
   Real.swift
   RealFunctions.swift
   RelaxedArithmetic.swift)
-set_target_properties(RealModule PROPERTIES
-  INTERFACE_INCLUDE_DIRECTORIES ${CMAKE_Swift_MODULE_DIRECTORY})
 target_link_libraries(RealModule PUBLIC
   _NumericsShims)
 

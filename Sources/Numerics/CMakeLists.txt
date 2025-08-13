@@ -9,8 +9,7 @@ See https://swift.org/LICENSE.txt for license information
 
 add_library(Numerics
   Numerics.swift)
-set_target_properties(Numerics PROPERTIES
-  INTERFACE_INCLUDE_DIRECTORIES ${CMAKE_Swift_MODULE_DIRECTORY})
+
 # NOTE: generate the force load symbol to ensure that the import library is
 # generated on Windows for autolinking.
 target_compile_options(Numerics PUBLIC
